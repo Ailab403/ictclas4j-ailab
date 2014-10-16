@@ -4,6 +4,8 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.util.ArrayList;
+import java.util.logging.Logger;
+
 import org.ictclas4j.bean.Atom;
 import org.ictclas4j.bean.Dictionary;
 import org.ictclas4j.bean.MidResult;
@@ -61,6 +63,9 @@ public class SegTag {
 			sr.setRawContent(src);
 			SentenceSeg ss = new SentenceSeg(src);
 			ArrayList<Sentence> sens = ss.getSens();
+
+			// superhy fix
+			ArrayList<String> words = new ArrayList<String>();
 
 			for (Sentence sen : sens) {
 				long start = System.currentTimeMillis();
@@ -136,8 +141,9 @@ public class SegTag {
 							ArrayList<SegNode> optSegPath = getSegPath(
 									optSegGraph, optOnePath);
 							lexTagger.recognition(optSegPath);
-							String optResult = withTag ? outputResult(optSegPath)
-									: outputResultNoTag(optSegPath);
+							String optResult = withTag ? outputResult(
+									optSegPath, words) : outputResultNoTag(
+									optSegPath, words);
 							mr.addOptResult(optResult);
 							adjResult = AdjustSeg.finaAdjust(optSegPath,
 									personTagger, placeTagger);
@@ -152,12 +158,15 @@ public class SegTag {
 						}
 					}
 					sr.addMidResult(mr);
-				} else
+				} else {
 					midResult = sen.getContent();
+					words.add(midResult);
+				}
 				finalResult += midResult;
 				midResult = null;
 			}
 
+			sr.setWords(words);
 			sr.setFinalResult(finalResult);
 		}
 
@@ -189,7 +198,15 @@ public class SegTag {
 	}
 
 	// 根据分词路径生成分词结果
-	private String outputResult(ArrayList<SegNode> wrList) {
+	/**
+	 * superhy fix
+	 * 
+	 * @param wrList
+	 * @param words
+	 * @return
+	 */
+	private String outputResult(ArrayList<SegNode> wrList,
+			ArrayList<String> words) {
 		String result = null;
 		String temp = null;
 		char[] pos = new char[2];
@@ -206,6 +223,10 @@ public class SegTag {
 					if (pos[1] > 0)
 						temp += "" + pos[1];
 					result += sn.getSrcWord() + "/" + temp + " ";
+
+					if (words != null) {
+						words.add(sn.getSrcWord());
+					}
 				}
 			}
 		}
@@ -213,29 +234,52 @@ public class SegTag {
 		return result;
 	}
 
+	/**
+	 * superhy fix
+	 * 
+	 * @param wrList
+	 * @return
+	 */
+	private String outputResult(ArrayList<SegNode> wrList) {
+		return outputResult(wrList, null);
+	}
+
 	// 根据分词路径生成分词结果,但不带词性标签
-	private String outputResultNoTag(ArrayList<SegNode> wrList) {
+	/**
+	 * superhy fix
+	 * 
+	 * @param wrList
+	 * @return
+	 */
+	private String outputResultNoTag(ArrayList<SegNode> wrList,
+			ArrayList<String> words) {
 		String result = null;
-		String temp = null;
-		char[] pos = new char[2];
 		if (wrList != null && wrList.size() > 0) {
 			result = "";
 			for (int i = 0; i < wrList.size(); i++) {
 				SegNode sn = wrList.get(i);
 				if (sn.getPos() != POSTag.SEN_BEGIN
 						&& sn.getPos() != POSTag.SEN_END) {
-					int tag = Math.abs(sn.getPos());
-					pos[0] = (char) (tag / 256);
-					pos[1] = (char) (tag % 256);
-					temp = "" + pos[0];
-					if (pos[1] > 0)
-						temp += "" + pos[1];
 					result += sn.getSrcWord() + " ";
+
+					if (words != null) {
+						words.add(sn.getSrcWord());
+					}
 				}
 			}
 		}
 
 		return result;
+	}
+
+	/**
+	 * superhy fix
+	 * 
+	 * @param wrList
+	 * @return
+	 */
+	private String outputResultNoTag(ArrayList<SegNode> wrList) {
+		return outputResultNoTag(wrList, null);
 	}
 
 	public void setSegPathCount(int segPathCount) {

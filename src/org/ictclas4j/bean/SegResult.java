@@ -12,6 +12,8 @@ public class SegResult {
 
 	private String finalResult;// 最终分词结果
 
+	private ArrayList<String> words;// 分词后的词结果,superhy fix
+
 	public SegResult(String rawContent) {
 		this.rawContent = rawContent;
 		startTime = System.currentTimeMillis();
@@ -42,7 +44,32 @@ public class SegResult {
 	}
 
 	public long getSpendTime() {
-		return System.currentTimeMillis()-startTime;
+		return System.currentTimeMillis() - startTime;
+	}
+
+	public void setStartTime(long startTime) {
+		this.startTime = startTime;
+	}
+
+	public long getStartTime() {
+		return startTime;
+	}
+
+	public ArrayList<String> getWords() {
+		return words;
+	}
+
+	public void setWords(ArrayList<String> words) {
+		this.words = words;
+	}
+
+	public void addWord(String word) {
+		if (words == null) {
+			words = new ArrayList<String>();
+		}
+		if (word != null) {
+			words.add(word);
+		}
 	}
 
 	public void addMidResult(MidResult mr) {
@@ -70,7 +97,8 @@ public class SegResult {
 			if (finalResult != null) {
 				html.append("<p>最终分词结果：");
 				html.append("<table border=\"1\" width=\"100%\"><tr><td width=\"100%\">");
-				html.append("<font color=\"blue\" size=6><b>" + finalResult + "</b></font>");
+				html.append("<font color=\"blue\" size=6><b>" + finalResult
+						+ "</b></font>");
 				html.append("</td></tr></table>");
 			}
 		}
