@@ -1,0 +1,344 @@
+1、修改 Segment：
+1)把原来的outputResult(ArrayList<SegNode> wrList) 复制为 outputResult(ArrayList<SegNode> wrList, ArrayList<String> words) 方法，并添加收集词的内容，最后为：
+
+// 根据分词路径生成分词结果  
+private String outputResult(ArrayList<SegNode> wrList, ArrayList<String> words) {  
+    String result = null;  
+    String temp=null;  
+    char[] pos = new char[2];  
+    if (wrList != null &amp;amp;&amp;amp; wrList.size() > 0) {  
+        result = "";  
+        for (int i = 0; i < wrList.size(); i++) {  
+            SegNode sn = wrList.get(i);  
+            if (sn.getPos() != POSTag.SEN_BEGIN &amp;amp;&amp;amp; sn.getPos() != POSTag.SEN_END) {  
+                int tag = Math.abs(sn.getPos());  
+                pos[0] = (char) (tag / 256);  
+                pos[1] = (char) (tag % 256);  
+                temp=""+pos[0];  
+                if(pos[1]>0)  
+                    temp+=""+pos[1];  
+                result += sn.getSrcWord() + "/" + temp + " ";  
+                if(words != null) { //chenlb add  
+                    words.add(sn.getSrcWord());  
+                }  
+            }  
+        }  
+    }  
+  
+    return result;  
+}  
+2)原来的outputResult(ArrayList<SegNode> wrList) 改为：
+
+//chenlb move to outputResult(ArrayList<SegNode> wrList, ArrayList<String> words)  
+private String outputResult(ArrayList<SegNode> wrList) {  
+    return outputResult(wrList, null);  
+}  
+3)修改调用outputResult(ArrayList<SegNode> wrList)的地方（注意不是所有的调用），大概在 Segment 的126行 String optResult = outputResult(optSegPath); 改为 String optResult = outputResult(optSegPath, words); 当然还要定义ArrayList<String> words了，最终 Segment.split(String src) 如下：
+
+public SegResult split(String src) {  
+    SegResult sr = new SegResult(src);// 分词结果  
+    String finalResult = null;  
+  
+    if (src != null) {  
+        finalResult = "";  
+        int index = 0;  
+        String midResult = null;  
+        sr.setRawContent(src);  
+        SentenceSeg ss = new SentenceSeg(src);  
+        ArrayList<Sentence> sens = ss.getSens();  
+  
+        ArrayList<String> words = new ArrayList<String>();  //chenlb add  
+  
+        for (Sentence sen : sens) {  
+            logger.debug(sen);  
+            long start=System.currentTimeMillis();  
+            MidResult mr = new MidResult();  
+            mr.setIndex(index++);  
+            mr.setSource(sen.getContent());  
+            if (sen.isSeg()) {  
+  
+                // 原子分词  
+                AtomSeg as = new AtomSeg(sen.getContent());  
+                ArrayList<Atom> atoms = as.getAtoms();  
+                mr.setAtoms(atoms);  
+                System.err.println("[atom time]:"+(System.currentTimeMillis()-start));  
+                start=System.currentTimeMillis();  
+  
+                // 生成分词图表,先进行初步分词，然后进行优化，最后进行词性标记  
+                SegGraph segGraph = GraphGenerate.generate(atoms, coreDict);  
+                mr.setSegGraph(segGraph.getSnList());  
+                // 生成二叉分词图表  
+                SegGraph biSegGraph = GraphGenerate.biGenerate(segGraph, coreDict, bigramDict);  
+                mr.setBiSegGraph(biSegGraph.getSnList());  
+                System.err.println("[graph time]:"+(System.currentTimeMillis()-start));  
+                start=System.currentTimeMillis();  
+  
+                // 求N最短路径  
+                NShortPath nsp = new NShortPath(biSegGraph, segPathCount);  
+                ArrayList<ArrayList<Integer>> bipath = nsp.getPaths();  
+                mr.setBipath(bipath);  
+                System.err.println("[NSP time]:"+(System.currentTimeMillis()-start));  
+                start=System.currentTimeMillis();  
+  
+                for (ArrayList<Integer> onePath : bipath) {  
+                    // 得到初次分词路径  
+                    ArrayList<SegNode> segPath = getSegPath(segGraph, onePath);  
+                    ArrayList<SegNode> firstPath = AdjustSeg.firstAdjust(segPath);  
+                    String firstResult = outputResult(firstPath);  
+                    mr.addFirstResult(firstResult);  
+                    System.err.println("[first time]:"+(System.currentTimeMillis()-start));  
+                    start=System.currentTimeMillis();  
+  
+                    // 处理未登陆词，进对初次分词结果进行优化  
+                    SegGraph optSegGraph = new SegGraph(firstPath);  
+                    ArrayList<SegNode> sns = clone(firstPath);  
+                    personTagger.recognition(optSegGraph, sns);  
+                    transPersonTagger.recognition(optSegGraph, sns);  
+                    placeTagger.recognition(optSegGraph, sns);  
+                    mr.setOptSegGraph(optSegGraph.getSnList());  
+                    System.err.println("[unknown time]:"+(System.currentTimeMillis()-start));  
+                    start=System.currentTimeMillis();  
+  
+                    // 根据优化后的结果，重新进行生成二叉分词图表  
+                    SegGraph optBiSegGraph = GraphGenerate.biGenerate(optSegGraph, coreDict, bigramDict);  
+                    mr.setOptBiSegGraph(optBiSegGraph.getSnList());  
+  
+                    // 重新求取N－最短路径  
+                    NShortPath optNsp = new NShortPath(optBiSegGraph, segPathCount);  
+                    ArrayList<ArrayList<Integer>> optBipath = optNsp.getPaths();  
+                    mr.setOptBipath(optBipath);  
+  
+                    // 生成优化后的分词结果，并对结果进行词性标记和最后的优化调整处理  
+                    ArrayList<SegNode> adjResult = null;  
+                    for (ArrayList<Integer> optOnePath : optBipath) {  
+                        ArrayList<SegNode> optSegPath = getSegPath(optSegGraph, optOnePath);  
+                        lexTagger.recognition(optSegPath);  
+                        String optResult = outputResult(optSegPath, words); //chenlb changed  
+                        mr.addOptResult(optResult);  
+                        adjResult = AdjustSeg.finaAdjust(optSegPath, personTagger, placeTagger);  
+                        String adjrs = outputResult(adjResult);  
+                        System.err.println("[last time]:"+(System.currentTimeMillis()-start));  
+                        start=System.currentTimeMillis();  
+                        if (midResult == null)  
+                            midResult = adjrs;  
+                        break;  
+                    }  
+                }  
+                sr.addMidResult(mr);  
+            } else {  
+                midResult = sen.getContent();  
+                words.add(midResult);   //chenlb add  
+            }  
+            finalResult += midResult;  
+            midResult = null;  
+        }  
+  
+        sr.setWords(words); //chenlb add  
+  
+        sr.setFinalResult(finalResult);  
+        DebugUtil.output2html(sr);  
+        logger.info(finalResult);  
+    }  
+  
+    return sr;  
+}  
+4)Segment中的构造方法，词典路径分隔可以改为"/"
+
+5)同时修改了一个漏词的 bug，请看：ictclas4j的一个bug
+
+2、修改 SegResult：
+添加以下内容：
+
+private ArrayList<String> words;  //记录分词后的词结果，chenlb add  
+    /** 
+     * 添加词条。 
+     * @param word null 不添加 
+     * @author chenlb 2009-1-21 下 午05:01:25 
+     */  
+    public void addWord(String word) {  
+        if(words == null) {  
+            words = new ArrayList<String>();  
+        }  
+        if(word != null) {  
+            words.add(word);  
+        }  
+    }  
+  
+    public ArrayList<String> getWords() {  
+        return words;  
+    }  
+  
+    public void setWords(ArrayList<String> words) {  
+        this.words = words;  
+    }  
+下面是创建 ictclas4j 的 lucene analyzer
+1、新建一个ICTCLAS4jTokenizer类：
+
+package com.chenlb.analysis.ictclas4j;  
+  
+import java.io.IOException;  
+import java.io.Reader;  
+import java.util.ArrayList;  
+  
+import org.apache.lucene.analysis.Token;  
+import org.apache.lucene.analysis.Tokenizer;  
+import org.ictclas4j.bean.SegResult;  
+import org.ictclas4j.segment.Segment;  
+  
+/** 
+ * ictclas4j 切词 
+ * 
+ * @author chenlb 2009-1-23 上午11:39:10 
+ */  
+public class ICTCLAS4jTokenizer extends Tokenizer {  
+  
+    private static Segment segment;  
+  
+    private StringBuilder sb = new StringBuilder();  
+  
+    private ArrayList<String> words;  
+  
+    private int startOffest = 0;  
+    private int length = 0;  
+    private int wordIdx = 0;  
+  
+    public ICTCLAS4jTokenizer() {  
+        words = new ArrayList<String>();  
+    }  
+  
+    public ICTCLAS4jTokenizer(Reader input) {  
+        super(input);  
+        char[] buf = new char[8192];  
+        int d = -1;  
+        try {  
+            while((d=input.read(buf)) != -1) {  
+                sb.append(buf, 0, d);  
+            }  
+        } catch (IOException e) {  
+            e.printStackTrace();  
+        }  
+        SegResult sr = seg().split(sb.toString());  //分词  
+        words = sr.getWords();  
+    }  
+  
+    public Token next(Token reusableToken) throws IOException {  
+        assert reusableToken != null;  
+  
+        length = 0;  
+        Token token = null;  
+        if(wordIdx < words.size()) {  
+            String word = words.get(wordIdx);  
+            length = word.length();  
+            token = reusableToken.reinit(word, startOffest, startOffest+length);  
+            wordIdx++;  
+            startOffest += length;  
+  
+        }  
+  
+        return token;  
+    }  
+  
+    private static Segment seg() {  
+        if(segment == null) {  
+            segment = new Segment(1);  
+        }  
+        return segment;  
+    }  
+}  
+2、新建一个ICTCLAS4jFilter类：
+
+package com.chenlb.analysis.ictclas4j;  
+  
+import org.apache.lucene.analysis.Token;  
+import org.apache.lucene.analysis.TokenFilter;  
+import org.apache.lucene.analysis.TokenStream;  
+  
+/** 
+ * 标点符等， 过虑. 
+ * 
+ * @author chenlb 2009-1-23 下午03:06:00 
+ */  
+public class ICTCLAS4jFilter extends TokenFilter {  
+  
+    protected ICTCLAS4jFilter(TokenStream input) {  
+        super(input);  
+    }  
+  
+    public final Token next(final Token reusableToken) throws java.io.IOException {  
+        assert reusableToken != null;  
+  
+        for (Token nextToken = input.next(reusableToken); nextToken != null; nextToken = input.next(reusableToken)) {  
+            String text = nextToken.term();  
+  
+                switch (Character.getType(text.charAt(0))) {  
+  
+                case Character.LOWERCASE_LETTER:  
+                case Character.UPPERCASE_LETTER:  
+  
+                    // English word/token should larger than 1 character.  
+                    if (text.length()>1) {  
+                        return nextToken;  
+                    }  
+                    break;  
+                case Character.DECIMAL_DIGIT_NUMBER:  
+                case Character.OTHER_LETTER:  
+  
+                    // One Chinese character as one Chinese word.  
+                    // Chinese word extraction to be added later here.  
+  
+                    return nextToken;  
+                }  
+  
+        }  
+        return null;  
+    }  
+}  
+3、新建一个ICTCLAS4jAnalyzer类：
+
+package com.chenlb.analysis.ictclas4j;  
+  
+import java.io.Reader;  
+  
+import org.apache.lucene.analysis.Analyzer;  
+import org.apache.lucene.analysis.LowerCaseFilter;  
+import org.apache.lucene.analysis.StopFilter;  
+import org.apache.lucene.analysis.TokenStream;  
+  
+/** 
+ * ictclas4j 的 lucene 分析器 
+ * 
+ * @author chenlb 2009-1-23 上午 11:39:39 
+ */  
+public class ICTCLAS4jAnalyzer extends Analyzer {  
+  
+    private static final long serialVersionUID = 1L;  
+  
+    // 可以自定义添加更多的过虑的词（高频无多太用处的词）  
+    private static final String[] STOP_WORDS = {  
+        "and", "are", "as", "at", "be", "but", "by",  
+        "for", "if", "in", "into", "is", "it",  
+        "no", "not", "of", "on", "or", "such",  
+        "that", "the", "their", "then", "there", "these",  
+        "they", "this", "to", "was", "will", "with",  
+        "的"  
+    };  
+  
+    public TokenStream tokenStream(String fieldName, Reader reader) {  
+        TokenStream result = new ICTCLAS4jTokenizer(reader);  
+        result = new ICTCLAS4jFilter(new StopFilter(new LowerCaseFilter(result), STOP_WORDS));  
+        return result;  
+    }  
+  
+}  
+下面来测试下分词效果：
+文本内容：
+
+京华时报1月23日报道 昨天，受一股来自中西伯利亚的强冷空气影响，本市出现大风降温天气，白天最高气温只有零下7摄氏度，同时伴有6到7级的偏北风。
+
+原分词结果：
+
+京华/nz 时/ng 报/v 1月/t 23日/t 报道/v  昨天/t ，/w 受/v 一/m 股/q 来自/v 中/f 西伯利亚/ns 的/u 强/a 冷空气/n 影响/vn ，/w 本市/r 出现/v 大风/n 降温/vn 天气/n ，/w 白天/t 最高/a 气温/n 只/d 有/v 零下/s 7/m 摄氏度/q ，/w 同时/c 伴/v 有/v 6/m 到/v 7/m 级/q 的/u 偏/a 北风/n 。/w 
+
+analyzer：
+
+[京华] [时] [报] [1月] [23日] [报道] [昨天] [受] [一] [股] [来自] [中] [西伯利亚] [强] [冷空气] [影响] [本市] [出现] [大风] [降温] [天气] [白天] [最高] [气温] [只] [有] [零下] [7] [摄氏度] [同时] [伴] [有] [6] [到] [7] [级] [偏] [北风]
